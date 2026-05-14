@@ -49,8 +49,11 @@ Once approved in the official marketplace:
 
 ## Local development
 
+Clone this repo and point Claude Code at the root:
+
 ```bash
-claude --plugin-dir ./plugin
+git clone https://github.com/ShipToday/forge-plugin-claude
+claude --plugin-dir ./forge-plugin-claude
 ```
 
 ## License
