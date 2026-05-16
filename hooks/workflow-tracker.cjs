@@ -80,18 +80,26 @@ function isWorkflowAbandoned(response) {
 }
 
 /**
- * Check if a forge__update_state response indicates a relayed-question
- * CHECKPOINT — the same step is still running and is awaiting user input
- * via the parent's AskUserQuestion. Marker is rendered by
- * src/tools/update-state.js: `**CHECKPOINT** — "<step>" awaiting user input`.
+ * Check if a forge__update_state response indicates a CHECKPOINT — the
+ * same step is still running and is awaiting some form of user input.
+ * Two variants share this marker:
+ *   - Relayed-question CHECKPOINT (`"<step>" awaiting user input`): the
+ *     skill emitted needs_input and is waiting for the AI to relay it.
+ *   - Post-step confirmation-gate CHECKPOINT
+ *     (`"<step>" paused at confirmation gate`): the orchestrator paused
+ *     after the step completed, waiting for the user to confirm advance.
  *
- * Returns the step name that's pinned, or null if the response does not
- * carry the CHECKPOINT marker.
+ * Both are rendered by src/tools/update-state.js and both should keep
+ * the workflow-guard locked to ask_user / forge__update_state /
+ * forge__abandon_workflow until the AI resolves the gate.
+ *
+ * Returns the step name that's pinned, or null if the response does
+ * not carry a CHECKPOINT marker.
  */
 function extractPendingCheckpointStep(response) {
   if (!response) return null;
   const text = typeof response === 'string' ? response : JSON.stringify(response);
-  const match = text.match(/\*\*CHECKPOINT\*\*\s+—\s+"([^"]+)"\s+awaiting user input/);
+  const match = text.match(/\*\*CHECKPOINT\*\*\s+—\s+"([^"]+)"\s+(?:awaiting user input|paused at confirmation gate)/);
   return match ? match[1] : null;
 }
 
