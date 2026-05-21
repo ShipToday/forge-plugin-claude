@@ -26,7 +26,7 @@
 
 'use strict';
 
-const sessionState = require('./session-state.cjs');
+const sessionStateModule = require('./session-state.cjs');
 
 // -- Tool name patterns (MCP names include dynamic server UUIDs) --------------
 
@@ -229,6 +229,10 @@ async function main() {
   } catch {
     return; // Malformed input — exit silently
   }
+
+  // Scope state to this Claude Code session so concurrent sessions in the
+  // same directory each track their own workflow.
+  const sessionState = sessionStateModule.forSession(event.session_id);
 
   const toolName = event.tool_name || '';
   const toolResponse = event.tool_response || '';
