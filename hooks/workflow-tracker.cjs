@@ -183,25 +183,36 @@ function extractCurrentStepSkill(response) {
 
 // Maps session_observer outcome values to local session status.
 // "linked" is handled separately (observer launches a workflow → active_workflow: true).
+// "observation_disabled" (org-admin gate fired — SHI-758/SHI-759) maps to "logged"
+// because the server still records the suppressed-observation row in audit_events;
+// the session is audit-tracked, just not nudged. The corresponding cache-flag write
+// (`forge_observation_enabled: false`) is layered on in the main handler below so
+// the SHI-759 stop-observer hook can short-circuit subsequent Stops without an
+// MCP round-trip.
 const OUTCOME_TO_STATUS = {
   ad_hoc: 'logged',
   snoozed: 'snoozed',
   dismissed: 'dismissed',
+  observation_disabled: 'logged',
 };
 
 /**
- * Extract observer outcome from a forge__update_state tool input.
- * Returns the local status string if this is an observation_outcome event,
- * or null otherwise.
+ * Extract observer event metadata from a forge__update_state tool input.
+ * Returns `{ status, outcome }` if this is a recognised observation_outcome
+ * event, or null otherwise. `status` is the mapped local session status;
+ * `outcome` is the raw outcome string the caller can branch on for
+ * outcome-specific side effects (e.g. the SHI-759 cache-flag pin).
  */
-function extractObserverStatus(event) {
+function extractObserverEvent(event) {
   let input = event.tool_input || {};
   if (typeof input === 'string') {
     try { input = JSON.parse(input); } catch { return null; }
   }
   const updates = input.state_updates;
   if (!updates || updates.event_type !== 'observation_outcome') return null;
-  return OUTCOME_TO_STATUS[updates.outcome] || null;
+  const status = OUTCOME_TO_STATUS[updates.outcome] || null;
+  if (!status) return null;
+  return { status, outcome: updates.outcome };
 }
 
 /**
@@ -326,8 +337,9 @@ async function main() {
   // use it for checkpoint logic. Claude is instructed to write this itself,
   // but it inconsistently forgets — this hook makes it reliable.
   if (isStateUpdate) {
-    const observerStatus = extractObserverStatus(event);
-    if (observerStatus) {
+    const observerEvent = extractObserverEvent(event);
+    if (observerEvent) {
+      const { status: observerStatus, outcome } = observerEvent;
       const statusUpdates = {
         status: observerStatus,
         last_checkpoint_at: new Date().toISOString(),
@@ -335,6 +347,14 @@ async function main() {
       // For dismissed/no_observation, also block re-observation
       if (observerStatus === 'dismissed') {
         statusUpdates.observer_blocked = true;
+      }
+      // For observation_disabled (org-admin gate fired), pin the per-session
+      // cache flag so SHI-759's stop-observer.cjs Step 3b read sees `=== false`
+      // on subsequent Stops and short-circuits without an MCP round-trip.
+      // This is the backstop for the documented gated-payload state write —
+      // if the AI parent forgets, this hook makes the steady-state still cheap.
+      if (outcome === 'observation_disabled') {
+        statusUpdates.forge_observation_enabled = false;
       }
       sessionState.write(statusUpdates);
       // Don't return — still check for workflow completion below

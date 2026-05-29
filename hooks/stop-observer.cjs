@@ -15,7 +15,16 @@
  *   1. Exit if stop_hook_active (prevent infinite loop)
  *   2. Increment turn_count (tracks conversation progress)
  *   3. For linked/logged: checkpoint every CHECKPOINT_INTERVAL turns
- *      (silent audit event capturing elapsed engineering time)
+ *      (silent audit event capturing elapsed engineering time — runs
+ *      regardless of forge_observation_enabled because the gate is
+ *      about the observation NUDGE, not about engineering-time
+ *      tracking for already-tracked sessions).
+ *   3b. SHI-759: exit silently if the per-session cache says the org
+ *      admin has disabled observation (forge_observation_enabled =
+ *      false). Steady-state zero-roundtrip — no MCP call until the
+ *      next Claude Code session starts (which begins with a fresh
+ *      cache). Field is written into the cache by the session_observer
+ *      gated path (SHI-758) when it first detects the admin opt-out.
  *   4. For snoozed: re-fire observer every CHECKPOINT_INTERVAL turns
  *      (re-prompts user to track)
  *   5. Exit if dismissed (terminal — never re-fires)
@@ -181,6 +190,28 @@ async function main() {
     process.stdout.write(buildCheckpointResponse(elapsedMs, state, sessionState.stateFilePath));
     return;
   }
+
+  // Step 3b: SHI-759 — per-session observation gate cache.
+  //
+  // When the MCP-side session_observer skill runs and detects that the
+  // org admin has disabled observation (Clerk publicMetadata.
+  // forgeObservationEnabled = false, surfaced by the orchestrator's
+  // org-settings hydrator), its gated payload tells the parent to
+  // write forge_observation_enabled: false into this session's state
+  // file. On every subsequent Stop in the same Claude Code session,
+  // this check short-circuits silently so the hook does NOT re-invoke
+  // session_observer — saving one MCP round-trip per turn for the
+  // steady state. Strict `=== false` so cache misses (null /
+  // undefined / true / non-boolean) fall through to the normal
+  // directive, preserving the opt-out semantics that match the
+  // dashboard's default-true contract.
+  //
+  // Placed AFTER the linked/logged checkpoint branch so that
+  // engineering-time tracking on already-tracked sessions continues
+  // independently of the observation toggle — the toggle gates the
+  // initial nudge, not silent checkpoints on linked/logged work.
+  // Field name shared verbatim with SHI-741 (Cursor parity).
+  if (state.forge_observation_enabled === false) return;
 
   // Step 4: Snoozed sessions — re-fire observer every CHECKPOINT_INTERVAL turns
   if (state.status === 'snoozed') {
